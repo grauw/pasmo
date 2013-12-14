@@ -127,6 +127,8 @@ runtime_error IsPredefined ("Can't redefine, is predefined");
 
 runtime_error OutOfSyncPRL ("PRL genration failed: out of sync");
 
+runtime_error Exceeded64K ("64K size exceeded, not supported for this output type");
+
 class NoInstruction : public runtime_error {
 public:
 	NoInstruction (const Token & tok) :
@@ -1112,10 +1114,11 @@ private:
 	bool mode86;
 	DebugType debugtype;
 
-	byte mem [65536];
+	byte mem [1048576];
 	address base;
 	address current;
 	address currentinstruction;
+	unsigned int currentmem;
 	address minused;
 	address maxused;
 	address entrypoint;
@@ -1317,6 +1320,7 @@ Asm::In::In () :
 	base (0),
 	current (0),
 	currentinstruction (0),
+	currentmem (0),
 	minused (65535),
 	maxused (0),
 	hasentrypoint (false),
@@ -1344,6 +1348,7 @@ Asm::In::In (const Asm::In & in) :
 	base (0),
 	current (0),
 	currentinstruction (0),
+	currentmem (0),
 	minused (65535),
 	maxused (0),
 	hasentrypoint (false),
@@ -1483,7 +1488,8 @@ void Asm::In::gendata (byte data)
 		minused= current;
 	if (current > maxused)
 		maxused= current;
-	mem [current]= data;
+	mem [currentmem]= data;
+	++currentmem;
 	++current;
 }
 
@@ -1515,7 +1521,7 @@ void Asm::In::showcode (const std::string & instruction)
 			}
 			* pout << hex4 (pos) << ':';
 		}
-		* pout << hex2 (mem [pos] );
+		* pout << hex2 (mem [pos + ((int)currentmem - current)] );
 	}
 	if (! instshowed)
 	{
@@ -2414,6 +2420,7 @@ void Asm::In::dopass ()
 	std::for_each (mapvar.begin (), mapvar.end (),
 		pasmo_impl::ClearDefl () );
 
+	currentmem= 0;
 	current= base;
 	iflevel= 0;
 
@@ -5866,19 +5873,21 @@ void Asm::In::message_emit (const std::string & type)
 
 address Asm::In::getcodesize () const
 {
-	return maxused - minused + 1;
+	if (currentmem >= 0x10000)
+		throw Exceeded64K;
+	return currentmem;
 }
 
 void Asm::In::writebincode (std::ostream & out)
 {
-	out.write (reinterpret_cast <char *> (mem + minused), getcodesize ());
+	out.write (reinterpret_cast <char *> (mem), getcodesize());
 }
 
 void Asm::In::emitobject (std::ostream & out)
 {
 	message_emit ("raw binary");
 
-	for (int i= minused; i <= maxused; ++i)
+	for (int i= 0; i < currentmem; ++i)
 	{
 		out.put (mem [i] );
 	}
@@ -5917,7 +5926,7 @@ void Asm::In::emittap (std::ostream & out)
 	// Pepare data needed.
 	address codesize= getcodesize ();
 	tap::CodeHeader headcodeblock (minused, codesize, headername);
-	tap::CodeBlock codeblock (codesize, mem + minused);
+	tap::CodeBlock codeblock (codesize, mem);
 
 	// Write the file.
 	headcodeblock.write (out);
@@ -5933,7 +5942,7 @@ void Asm::In::writetzxcode (std::ostream & out)
 
 	address codesize= getcodesize ();
 	tap::CodeHeader block1 (minused, codesize, headername);
-	tap::CodeBlock block2 (codesize, mem + minused);
+	tap::CodeBlock block2 (codesize, mem);
 
 	// Write the data.
 
@@ -5968,7 +5977,7 @@ void Asm::In::writecdtcode (std::ostream & out)
 	head.setloadaddress (minused);
 	head.setentry (entry);
 
-	address pos= minused;
+	address pos= 0;
 	address pending= codesize;
 
 	const address maxblock= 2048;
@@ -6205,8 +6214,8 @@ void Asm::In::emithex (std::ostream & out)
 {
 	message_emit ("Intel HEX");
 
-	address end= maxused + 1;
-	for (address i= minused; i < end; i+= 16)
+	address end= currentmem;
+	for (address i= 0; i < end; i+= 16)
 	{
 		address len= end - i;
 		if (len > 16)
@@ -6304,10 +6313,10 @@ void Asm::In::emitprl (std::ostream & out)
 	fill (reloc, reloc + reloclen, byte (0) );
 
 	// Build relocation bitmap.
-	for (address i= minused; i <= maxused; ++i)
+	for (address i= 0; i < currentmem; ++i)
 	{
 		byte b= mem [i];
-		byte b2= asmoff.mem [i + off];
+		byte b2= asmoff.mem [i];
 		if (b != b2)
 		{
 			if (b2 - b != off / 256)
@@ -6318,7 +6327,7 @@ void Asm::In::emitprl (std::ostream & out)
 					endl;
 				throw OutOfSyncPRL;
 			}
-			address pos= i - minused;
+			address pos= i;
 			static const byte mask [8]= {
 				0x80, 0x40, 0x20, 0x10,
 				0x08, 0x04, 0x02, 0x01
