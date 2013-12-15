@@ -129,6 +129,8 @@ runtime_error OutOfSyncPRL ("PRL genration failed: out of sync");
 
 runtime_error Exceeded64K ("64K size exceeded, not supported for this output type");
 
+runtime_error OutOfBufferSpace ("Out of compiler buffer space");
+
 class NoInstruction : public runtime_error {
 public:
 	NoInstruction (const Token & tok) :
@@ -1114,7 +1116,8 @@ private:
 	bool mode86;
 	DebugType debugtype;
 
-	byte mem [1048576];
+	const static int memcapacity = 1048576;
+	byte mem [memcapacity];
 	address base;
 	address current;
 	address currentinstruction;
@@ -1488,6 +1491,8 @@ void Asm::In::gendata (byte data)
 		minused= current;
 	if (current > maxused)
 		maxused= current;
+	if (currentmem >= memcapacity)
+		throw OutOfBufferSpace;
 	mem [currentmem]= data;
 	++currentmem;
 	++current;
